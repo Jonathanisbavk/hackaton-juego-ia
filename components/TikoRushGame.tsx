@@ -69,24 +69,27 @@ const COMBI_HEIGHT = 72;
 
 const PASAJERO_SIZE = 36;
 
-const OBSTACLE_BASE_SPEED = 170;
-const PASAJERO_BASE_SPEED = 130;
+const OBSTACLE_BASE_SPEED = 190;
+const PASAJERO_BASE_SPEED = 140;
 
-const SPAWN_INTERVAL_START = 1.1;
-const SPAWN_INTERVAL_MIN = 0.32;
-const DIFFICULTY_RAMP = 0.007;
+const SPAWN_INTERVAL_START = 1.0;
+const SPAWN_INTERVAL_MIN = 0.25;
+const DIFFICULTY_RAMP = 0.01;
 
-const PASAJERO_SPAWN_START = 1.8;
-const PASAJERO_SPAWN_MIN = 0.9;
-const PASAJERO_RAMP = 0.004;
+const PASAJERO_SPAWN_START = 1.7;
+const PASAJERO_SPAWN_MIN = 0.85;
+const PASAJERO_RAMP = 0.005;
 
 const MAX_ESTRELLAS = 5;
 const SOLES_GOAL = 100;
 const INVINCIBILITY_DURATION = 1.2; // seconds of invincibility after hit
 
-const TEMBLOR_THRESHOLD = 80; // soles needed to trigger temblor
-const TEMBLOR_SPEED_MULT = 1.5; // obstacle speed multiplier during temblor
-const TEMBLOR_SHAKE_INTENSITY = 4; // max pixel offset for screen shake
+const TEMBLOR_THRESHOLD = 70; // soles needed to trigger temblor
+const TEMBLOR_SPEED_MULT = 1.8; // obstacle speed multiplier during temblor
+const TEMBLOR_SHAKE_INTENSITY = 6; // max pixel offset for screen shake
+const TRACK_HORIZON_RATIO = 0.2;
+const TRACK_TOP_WIDTH_RATIO = 0.24;
+const TRACK_BOTTOM_WIDTH_RATIO = 0.7;
 
 // ═══════════════════════════════════════════
 // COLLISION (AABB)
@@ -122,6 +125,14 @@ function useSprites() {
   }, []);
 
   return sprites;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function getDepthScale(y: number, logicalH: number) {
+  return 0.7 + (clamp(y / Math.max(1, logicalH), 0, 1) * 0.75);
 }
 
 // ═══════════════════════════════════════════
@@ -552,54 +563,289 @@ function useGameLoop(
       ctx.stroke();
       ctx.restore();
 
+      const horizonY = logicalH * TRACK_HORIZON_RATIO;
+      const roadTopWidth = logicalW * TRACK_TOP_WIDTH_RATIO;
+      const roadBottomWidth = logicalW * TRACK_BOTTOM_WIDTH_RATIO;
+      const roadTopLeft = logicalW / 2 - roadTopWidth / 2;
+      const roadTopRight = logicalW / 2 + roadTopWidth / 2;
+      const roadBottomLeft = logicalW / 2 - roadBottomWidth / 2;
+      const roadBottomRight = logicalW / 2 + roadBottomWidth / 2;
+      const lavaGlow = isTemblor ? 0.45 : 0.22;
+
+      // ── Atmospheric background ──────
+      const sky = ctx.createLinearGradient(0, 0, 0, logicalH);
+      sky.addColorStop(0, isTemblor ? '#120606' : '#07111f');
+      sky.addColorStop(0.35, isTemblor ? '#1b0a09' : '#10253e');
+      sky.addColorStop(1, isTemblor ? '#2a0e0c' : '#07111f');
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, logicalW, logicalH);
+
+      // Distant smoke and stars
+      ctx.save();
+      for (let i = 0; i < 24; i++) {
+        const starX = (i * 173 + (elapsed * 12)) % logicalW;
+        const starY = horizonY * 0.28 + (i % 5) * 8;
+        ctx.fillStyle = i % 4 === 0 ? 'rgba(251, 191, 36, 0.75)' : 'rgba(255, 255, 255, 0.55)';
+        ctx.beginPath();
+        ctx.arc(starX, starY, i % 4 === 0 ? 1.8 : 1.1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // Volcano silhouettes
+      const volcanoBaseY = horizonY + 28;
+      const volcanoPeakX = logicalW * 0.68;
+      const volcanoWidth = logicalW * 0.26;
+      ctx.save();
+      const volcanoGrd = ctx.createLinearGradient(0, volcanoBaseY - 120, 0, volcanoBaseY + 12);
+      volcanoGrd.addColorStop(0, 'rgba(35, 16, 16, 0.2)');
+      volcanoGrd.addColorStop(1, isTemblor ? '#1e0908' : '#101827');
+      ctx.fillStyle = volcanoGrd;
+      ctx.beginPath();
+      ctx.moveTo(volcanoPeakX - volcanoWidth * 0.55, volcanoBaseY + 8);
+      ctx.lineTo(volcanoPeakX - volcanoWidth * 0.12, volcanoBaseY - 124);
+      ctx.lineTo(volcanoPeakX + volcanoWidth * 0.25, volcanoBaseY + 8);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = isTemblor ? 'rgba(251, 146, 60, 0.15)' : 'rgba(56, 189, 248, 0.06)';
+      ctx.beginPath();
+      ctx.ellipse(volcanoPeakX, volcanoBaseY - 110, 26, 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = `rgba(251, 115, 22, ${isTemblor ? 0.55 : 0.22})`;
+      ctx.beginPath();
+      ctx.ellipse(volcanoPeakX, volcanoBaseY - 122, 12, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = `rgba(251, 191, 36, ${lavaGlow})`;
+      ctx.beginPath();
+      ctx.ellipse(volcanoPeakX - 4, volcanoBaseY - 120, 8, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Side lava fields
+      ctx.save();
+      const lavaLeft = ctx.createLinearGradient(0, 0, roadBottomLeft, 0);
+      lavaLeft.addColorStop(0, isTemblor ? '#ff7a18' : '#ff6b00');
+      lavaLeft.addColorStop(0.7, isTemblor ? '#7f1d1d' : '#5b1a08');
+      lavaLeft.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = lavaLeft;
+      ctx.beginPath();
+      ctx.moveTo(0, logicalH);
+      ctx.lineTo(0, horizonY - 10);
+      ctx.lineTo(roadTopLeft - 12, horizonY + 20);
+      ctx.lineTo(roadBottomLeft - 38, logicalH);
+      ctx.closePath();
+      ctx.fill();
+
+      const lavaRight = ctx.createLinearGradient(logicalW, 0, roadBottomRight, 0);
+      lavaRight.addColorStop(0, isTemblor ? '#ff7a18' : '#ff6b00');
+      lavaRight.addColorStop(0.7, isTemblor ? '#7f1d1d' : '#5b1a08');
+      lavaRight.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = lavaRight;
+      ctx.beginPath();
+      ctx.moveTo(logicalW, logicalH);
+      ctx.lineTo(logicalW, horizonY - 10);
+      ctx.lineTo(roadTopRight + 12, horizonY + 20);
+      ctx.lineTo(roadBottomRight + 38, logicalH);
+      ctx.closePath();
+      ctx.fill();
+
+      // Lava cracks / embers
+      ctx.save();
+      ctx.strokeStyle = isTemblor ? 'rgba(255, 138, 61, 0.55)' : 'rgba(255, 174, 84, 0.3)';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 7; i++) {
+        const crackY = horizonY + 35 + i * 58;
+        const wobble = Math.sin(elapsed * 1.8 + i) * 12;
+        ctx.beginPath();
+        ctx.moveTo(roadBottomLeft - 20, crackY);
+        ctx.quadraticCurveTo(logicalW / 2 - 150 + wobble, crackY - 10, logicalW / 2 - 35, crackY + 6);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(roadBottomRight + 20, crackY + 6);
+        ctx.quadraticCurveTo(logicalW / 2 + 150 - wobble, crackY - 8, logicalW / 2 + 35, crackY + 10);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // ── Track surface with perspective ─
+      ctx.save();
+      const asphalt = ctx.createLinearGradient(roadTopLeft, 0, roadBottomRight, logicalH);
+      asphalt.addColorStop(0, isTemblor ? '#1b1111' : '#141d2f');
+      asphalt.addColorStop(0.5, isTemblor ? '#261515' : '#0f1726');
+      asphalt.addColorStop(1, isTemblor ? '#120807' : '#0a0f18');
+      ctx.fillStyle = asphalt;
+      ctx.beginPath();
+      ctx.moveTo(roadTopLeft, horizonY + 24);
+      ctx.lineTo(roadTopRight, horizonY + 24);
+      ctx.lineTo(roadBottomRight, logicalH);
+      ctx.lineTo(roadBottomLeft, logicalH);
+      ctx.closePath();
+      ctx.fill();
+
+      // Track borders
+      ctx.strokeStyle = isTemblor ? 'rgba(255, 123, 72, 0.9)' : 'rgba(167, 243, 208, 0.45)';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(roadTopLeft, horizonY + 24);
+      ctx.lineTo(roadBottomLeft, logicalH);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(roadTopRight, horizonY + 24);
+      ctx.lineTo(roadBottomRight, logicalH);
+      ctx.stroke();
+
+      // Center lane markers
+      ctx.save();
+      ctx.strokeStyle = isTemblor ? 'rgba(255, 210, 120, 0.65)' : 'rgba(226, 232, 240, 0.45)';
+      ctx.lineWidth = 2.5;
+      const laneSegments = 14;
+      for (let i = 0; i < laneSegments; i++) {
+        const t = i / laneSegments;
+        const y0 = horizonY + 26 + t * (logicalH - horizonY - 26);
+        const y1 = y0 + 24 + t * 26;
+        const widthAtY0 = roadTopWidth + (roadBottomWidth - roadTopWidth) * t;
+        const widthAtY1 = roadTopWidth + (roadBottomWidth - roadTopWidth) * Math.min(1, t + 0.02);
+        const x0 = logicalW / 2 - widthAtY0 * 0.5;
+        const x1 = logicalW / 2 - widthAtY1 * 0.5;
+        const dashOffset = (elapsed * 240 + i * 36) % 60;
+        ctx.setLineDash([18, 18]);
+        ctx.lineDashOffset = -dashOffset;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      // Road texture and depth haze
+      ctx.save();
+      ctx.fillStyle = isTemblor ? 'rgba(255, 122, 24, 0.06)' : 'rgba(103, 232, 249, 0.03)';
+      for (let i = 0; i < 10; i++) {
+        const bandY = horizonY + 30 + ((elapsed * 140 + i * 72) % (logicalH - horizonY - 30));
+        const bandW = roadTopWidth + (roadBottomWidth - roadTopWidth) * ((bandY - horizonY) / Math.max(1, logicalH - horizonY));
+        ctx.fillRect(logicalW / 2 - bandW / 2, bandY, bandW, 3);
+      }
+      ctx.restore();
+
       // ── Draw collectibles (pasajeros) ─
       for (const c of collectibles) {
         if (c.collected) continue;
+        const scale = getDepthScale(c.y, logicalH);
+        const dw = c.w * scale;
+        const dh = c.h * scale;
+        const dx = c.x + c.w / 2 - dw / 2;
+        const dy = c.y + c.h / 2 - dh / 2;
         ctx.save();
-        // Glow
-        ctx.shadowColor = 'rgba(251, 191, 36, 0.6)';
-        ctx.shadowBlur = 14;
+        ctx.shadowColor = 'rgba(251, 191, 36, 0.75)';
+        ctx.shadowBlur = 20;
         if (sp['pasajero'] && sp['pasajero'].complete) {
-          ctx.drawImage(sp['pasajero'], c.x, c.y, c.w, c.h);
+          ctx.drawImage(sp['pasajero'], dx, dy, dw, dh);
         } else {
           // Fallback circle
-          ctx.fillStyle = '#fbbf24';
+          const passengerGrd = ctx.createRadialGradient(dx + dw * 0.5, dy + dh * 0.45, 2, dx + dw * 0.5, dy + dh * 0.45, dw * 0.6);
+          passengerGrd.addColorStop(0, '#fff7c2');
+          passengerGrd.addColorStop(0.45, '#fbbf24');
+          passengerGrd.addColorStop(1, '#f97316');
+          ctx.fillStyle = passengerGrd;
           ctx.beginPath();
-          ctx.arc(c.x + c.w / 2, c.y + c.h / 2, c.w / 2, 0, Math.PI * 2);
+          ctx.ellipse(dx + dw / 2, dy + dh / 2, dw / 2, dh / 2, 0, 0, Math.PI * 2);
           ctx.fill();
         }
         // Sol coin indicator floating above
         ctx.shadowBlur = 0;
-        const coinSize = 16;
-        const bobY = Math.sin(elapsed * 4 + c.x) * 3;
+        const coinSize = 16 * scale;
+        const bobY = Math.sin(elapsed * 4 + c.x) * 3 * scale;
         if (sp['sol'] && sp['sol'].complete) {
-          ctx.drawImage(sp['sol'], c.x + c.w / 2 - coinSize / 2, c.y - coinSize - 4 + bobY, coinSize, coinSize);
+          ctx.drawImage(sp['sol'], dx + dw / 2 - coinSize / 2, dy - coinSize - 4 + bobY, coinSize, coinSize);
         }
         // "+10" label
-        ctx.font = '700 9px "Space Grotesk", system-ui';
+        ctx.font = `${Math.max(9, 9 * scale)}px "Space Grotesk", system-ui`;
         ctx.fillStyle = 'rgba(251, 191, 36, 0.8)';
         ctx.textAlign = 'center';
-        ctx.fillText('+10', c.x + c.w / 2, c.y - 2 + bobY);
+        ctx.fillText('+10', dx + dw / 2, dy - 2 + bobY);
         ctx.restore();
       }
 
       // ── Draw obstacles ───────────────
       for (const o of obstacles) {
+        const scale = getDepthScale(o.y, logicalH);
+        const dw = o.w * scale;
+        const dh = o.h * scale;
+        const dx = o.x + o.w / 2 - dw / 2;
+        const dy = o.y + o.h / 2 - dh / 2;
         ctx.save();
+        ctx.shadowColor = isTemblor ? 'rgba(255, 122, 24, 0.55)' : 'rgba(15, 23, 42, 0.45)';
+        ctx.shadowBlur = 12 * scale;
+        ctx.shadowOffsetY = 6;
         if (o.kind === 'BACHE') {
+          ctx.fillStyle = isTemblor ? '#2a0908' : '#1f2937';
+          ctx.beginPath();
+          ctx.ellipse(dx + dw / 2, dy + dh / 2, dw / 2, dh / 2, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = isTemblor ? '#fb923c' : '#94a3b8';
+          ctx.lineWidth = Math.max(1.5, 2 * scale);
+          ctx.stroke();
+          ctx.fillStyle = isTemblor ? 'rgba(251, 146, 60, 0.25)' : 'rgba(148, 163, 184, 0.2)';
+          ctx.beginPath();
+          ctx.ellipse(dx + dw / 2, dy + dh / 2, dw * 0.22, dh * 0.14, -0.4, 0, Math.PI * 2);
+          ctx.fill();
           if (sp['bache'] && sp['bache'].complete) {
-            ctx.drawImage(sp['bache'], o.x, o.y, o.w, o.h);
+            ctx.globalAlpha = 0.7;
+            ctx.drawImage(sp['bache'], dx, dy, dw, dh);
+            ctx.globalAlpha = 1;
           } else {
-            ctx.fillStyle = '#374151';
-            ctx.fillRect(o.x, o.y, o.w, o.h);
+            const pothole = ctx.createRadialGradient(dx + dw / 2, dy + dh / 2, 3, dx + dw / 2, dy + dh / 2, dw / 2);
+            pothole.addColorStop(0, '#09090b');
+            pothole.addColorStop(0.65, '#1f2937');
+            pothole.addColorStop(1, '#5b1a08');
+            ctx.fillStyle = pothole;
+            ctx.beginPath();
+            ctx.ellipse(dx + dw / 2, dy + dh / 2, dw / 2, dh / 2, 0, 0, Math.PI * 2);
+            ctx.fill();
           }
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+          ctx.beginPath();
+          ctx.ellipse(dx + dw * 0.34, dy + dh * 0.33, dw * 0.12, dh * 0.08, -0.3, 0, Math.PI * 2);
+          ctx.fill();
         } else {
+          const carBody = ctx.createLinearGradient(dx, dy, dx, dy + dh);
+          carBody.addColorStop(0, isTemblor ? '#fed7aa' : '#f8fafc');
+          carBody.addColorStop(0.55, isTemblor ? '#f97316' : '#dbeafe');
+          carBody.addColorStop(1, isTemblor ? '#7c2d12' : '#94a3b8');
+          ctx.fillStyle = carBody;
+          ctx.beginPath();
+          ctx.roundRect(dx, dy + dh * 0.12, dw, dh * 0.72, Math.max(4, 6 * scale));
+          ctx.fill();
+          ctx.fillStyle = isTemblor ? '#ea580c' : '#2563eb';
+          ctx.beginPath();
+          ctx.roundRect(dx + dw * 0.12, dy, dw * 0.76, dh * 0.42, Math.max(3, 5 * scale));
+          ctx.fill();
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+          ctx.beginPath();
+          ctx.roundRect(dx + dw * 0.17, dy + dh * 0.06, dw * 0.25, dh * 0.16, 3);
+          ctx.roundRect(dx + dw * 0.58, dy + dh * 0.06, dw * 0.22, dh * 0.16, 3);
+          ctx.fill();
+          ctx.fillStyle = '#111827';
+          ctx.beginPath();
+          ctx.arc(dx + dw * 0.18, dy + dh * 0.84, Math.max(2.5, 4 * scale), 0, Math.PI * 2);
+          ctx.arc(dx + dw * 0.82, dy + dh * 0.84, Math.max(2.5, 4 * scale), 0, Math.PI * 2);
+          ctx.fill();
           if (sp['combi'] && sp['combi'].complete) {
-            ctx.drawImage(sp['combi'], o.x, o.y, o.w, o.h);
+            ctx.globalAlpha = 0.85;
+            ctx.drawImage(sp['combi'], dx, dy, dw, dh);
+            ctx.globalAlpha = 1;
           } else {
-            ctx.fillStyle = '#e5e7eb';
-            ctx.fillRect(o.x, o.y, o.w, o.h);
+            ctx.strokeStyle = 'rgba(15, 23, 42, 0.4)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(dx, dy + dh * 0.12, dw, dh * 0.72);
           }
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+          ctx.lineWidth = 1.2;
+          ctx.strokeRect(dx + 1, dy + dh * 0.12 + 1, dw - 2, dh * 0.72 - 2);
         }
         ctx.restore();
       }
@@ -609,20 +855,50 @@ function useGameLoop(
       const blinkVisible = isInvincible ? Math.floor(elapsed * 10) % 2 === 0 : true;
 
       if (blinkVisible) {
+        const scale = getDepthScale(player.y, logicalH);
+        const pw = player.w * scale;
+        const ph = player.h * scale;
+        const px = player.x + player.w / 2 - pw / 2;
+        const py = player.y + player.h / 2 - ph / 2;
         // Glow beneath
-        ctx.shadowColor = 'rgba(251, 191, 36, 0.5)';
-        ctx.shadowBlur = 20;
+        ctx.shadowColor = isTemblor ? 'rgba(251, 146, 60, 0.65)' : 'rgba(251, 191, 36, 0.55)';
+        ctx.shadowBlur = 22 * scale;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+        ctx.beginPath();
+        ctx.ellipse(player.x + player.w / 2, player.y + player.h * 0.9, pw * 0.45, ph * 0.18, 0, 0, Math.PI * 2);
+        ctx.fill();
 
         if (sp['tico'] && sp['tico'].complete) {
-          ctx.drawImage(sp['tico'], player.x, player.y, player.w, player.h);
+          ctx.drawImage(sp['tico'], px, py, pw, ph);
         } else {
-          // Fallback rectangle
-          const grd = ctx.createLinearGradient(player.x, player.y, player.x, player.y + player.h);
-          grd.addColorStop(0, '#fbbf24');
-          grd.addColorStop(1, '#f59e0b');
+          // Fallback vehicle body with depth
+          const grd = ctx.createLinearGradient(px, py, px, py + ph);
+          grd.addColorStop(0, isTemblor ? '#fde68a' : '#fbbf24');
+          grd.addColorStop(0.5, isTemblor ? '#fb923c' : '#f59e0b');
+          grd.addColorStop(1, isTemblor ? '#c2410c' : '#b45309');
           ctx.fillStyle = grd;
-          ctx.fillRect(player.x, player.y, player.w, player.h);
+          ctx.beginPath();
+          ctx.roundRect(px, py + ph * 0.12, pw, ph * 0.76, 10);
+          ctx.fill();
+          ctx.fillStyle = 'rgba(17, 24, 39, 0.88)';
+          ctx.beginPath();
+          ctx.roundRect(px + pw * 0.16, py + ph * 0.08, pw * 0.68, ph * 0.24, 7);
+          ctx.fill();
         }
+      }
+      ctx.restore();
+
+      // Lava haze and embers overlay
+      ctx.save();
+      const emberCount = isTemblor ? 28 : 12;
+      for (let i = 0; i < emberCount; i++) {
+        const x = (Math.sin(elapsed * 0.8 + i * 9.1) * 0.5 + 0.5) * logicalW;
+        const y = horizonY + (i * 37 + elapsed * (isTemblor ? 60 : 24)) % (logicalH - horizonY);
+        const size = 1.2 + (i % 3) * 0.7;
+        ctx.fillStyle = isTemblor ? 'rgba(251, 146, 60, 0.8)' : 'rgba(251, 191, 36, 0.35)';
+        ctx.beginPath();
+        ctx.arc(x, y, size, 0, Math.PI * 2);
+        ctx.fill();
       }
       ctx.restore();
 
