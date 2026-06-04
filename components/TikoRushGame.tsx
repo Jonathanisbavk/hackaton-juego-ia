@@ -53,6 +53,7 @@ interface GameResults {
 interface HudData {
   soles: number;
   estrellas: number;
+  temblor: boolean;
 }
 
 // ═══════════════════════════════════════════
@@ -82,6 +83,10 @@ const PASAJERO_RAMP = 0.004;
 const MAX_ESTRELLAS = 5;
 const SOLES_GOAL = 100;
 const INVINCIBILITY_DURATION = 1.2; // seconds of invincibility after hit
+
+const TEMBLOR_THRESHOLD = 80; // soles needed to trigger temblor
+const TEMBLOR_SPEED_MULT = 1.5; // obstacle speed multiplier during temblor
+const TEMBLOR_SHAKE_INTENSITY = 4; // max pixel offset for screen shake
 
 // ═══════════════════════════════════════════
 // COLLISION (AABB)
@@ -311,7 +316,7 @@ function useGameLoop(
     window.addEventListener('resize', resize);
 
     // Initial HUD push
-    onHudUpdateRef.current({ soles: 0, estrellas: MAX_ESTRELLAS });
+    onHudUpdateRef.current({ soles: 0, estrellas: MAX_ESTRELLAS, temblor: false });
 
     // Spawn helpers
     const spawnObstacle = () => {
@@ -344,10 +349,11 @@ function useGameLoop(
 
     // Broadcast HUD only when changed
     const pushHud = () => {
-      const key = `${solesRef.current}:${estrellasRef.current}`;
+      const isTemblor = solesRef.current >= TEMBLOR_THRESHOLD;
+      const key = `${solesRef.current}:${estrellasRef.current}:${isTemblor}`;
       if (key !== lastHudRef.current) {
         lastHudRef.current = key;
-        onHudUpdateRef.current({ soles: solesRef.current, estrellas: estrellasRef.current });
+        onHudUpdateRef.current({ soles: solesRef.current, estrellas: estrellasRef.current, temblor: isTemblor });
       }
     };
 
@@ -375,6 +381,7 @@ function useGameLoop(
       player.y = logicalH - player.h - 32;
 
       const isInvincible = elapsed < invincibleUntilRef.current;
+      const isTemblor = solesRef.current >= TEMBLOR_THRESHOLD;
 
       // ── Spawn obstacles ──────────────
       obstSpawnRef.current += dt;
@@ -395,7 +402,8 @@ function useGameLoop(
       // ── Update obstacles ─────────────
       for (let i = obstacles.length - 1; i >= 0; i--) {
         const o = obstacles[i];
-        o.y += o.speed * dt;
+        const speedMod = isTemblor ? TEMBLOR_SPEED_MULT : 1;
+        o.y += o.speed * speedMod * dt;
 
         if (o.y > logicalH + 10) {
           obstacles.splice(i, 1);
@@ -463,19 +471,36 @@ function useGameLoop(
       // ══════════════════════════════════
       ctx.clearRect(0, 0, logicalW, logicalH);
 
+      // ── Temblor screen shake ─────────
+      if (isTemblor) {
+        const shakeX = (Math.random() - 0.5) * TEMBLOR_SHAKE_INTENSITY * 2;
+        const shakeY = (Math.random() - 0.5) * TEMBLOR_SHAKE_INTENSITY * 2;
+        ctx.save();
+        ctx.translate(shakeX, shakeY);
+      }
+
       // ── Road surface ─────────────────
       const roadGrd = ctx.createLinearGradient(0, 0, logicalW, 0);
-      roadGrd.addColorStop(0, '#0a0f18');
-      roadGrd.addColorStop(0.15, '#0d1520');
-      roadGrd.addColorStop(0.5, '#111b2a');
-      roadGrd.addColorStop(0.85, '#0d1520');
-      roadGrd.addColorStop(1, '#0a0f18');
+      if (isTemblor) {
+        // Red-tinted seismic road
+        roadGrd.addColorStop(0, '#180a0a');
+        roadGrd.addColorStop(0.15, '#1a0d0d');
+        roadGrd.addColorStop(0.5, '#221111');
+        roadGrd.addColorStop(0.85, '#1a0d0d');
+        roadGrd.addColorStop(1, '#180a0a');
+      } else {
+        roadGrd.addColorStop(0, '#0a0f18');
+        roadGrd.addColorStop(0.15, '#0d1520');
+        roadGrd.addColorStop(0.5, '#111b2a');
+        roadGrd.addColorStop(0.85, '#0d1520');
+        roadGrd.addColorStop(1, '#0a0f18');
+      }
       ctx.fillStyle = roadGrd;
-      ctx.fillRect(0, 0, logicalW, logicalH);
+      ctx.fillRect(-10, -10, logicalW + 20, logicalH + 20);
 
       // ── Scrolling grid ───────────────
       ctx.save();
-      ctx.strokeStyle = 'rgba(103, 232, 249, 0.025)';
+      ctx.strokeStyle = isTemblor ? 'rgba(239, 68, 68, 0.04)' : 'rgba(103, 232, 249, 0.025)';
       ctx.lineWidth = 1;
       const gridSize = 40;
       const offsetY = (elapsed * 22) % gridSize;
@@ -515,7 +540,7 @@ function useGameLoop(
 
       // ── Road edge lines ──────────────
       ctx.save();
-      ctx.strokeStyle = 'rgba(251, 191, 36, 0.15)';
+      ctx.strokeStyle = isTemblor ? 'rgba(239, 68, 68, 0.25)' : 'rgba(251, 191, 36, 0.15)';
       ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.moveTo(2, 0);
@@ -601,6 +626,32 @@ function useGameLoop(
       }
       ctx.restore();
 
+      // ── Temblor vignette overlay ─────
+      if (isTemblor) {
+        // Pulsating red vignette
+        const pulse = 0.06 + Math.sin(elapsed * 6) * 0.03;
+        const vGrd = ctx.createRadialGradient(
+          logicalW / 2, logicalH / 2, logicalH * 0.2,
+          logicalW / 2, logicalH / 2, logicalH * 0.8,
+        );
+        vGrd.addColorStop(0, 'transparent');
+        vGrd.addColorStop(1, `rgba(220, 38, 38, ${pulse})`);
+        ctx.fillStyle = vGrd;
+        ctx.fillRect(-10, -10, logicalW + 20, logicalH + 20);
+
+        // "SISMO" watermark
+        ctx.save();
+        ctx.font = '800 60px "Space Grotesk", system-ui';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = `rgba(239, 68, 68, ${0.04 + Math.sin(elapsed * 3) * 0.02})`;
+        ctx.fillText('⚠ SISMO ⚠', logicalW / 2, logicalH / 2);
+        ctx.restore();
+
+        // End shake transform
+        ctx.restore();
+      }
+
       // ── Next frame ───────────────────
       frameRef.current = requestAnimationFrame(render);
     };
@@ -628,7 +679,7 @@ export function TikoRushGame() {
   const [results, setResults] = useState<GameResults>({
     soles: 0, estrellas: 0, survived: 0, obstaclesDodged: 0, pasajerosRecogidos: 0, won: false,
   });
-  const [hud, setHud] = useState<HudData>({ soles: 0, estrellas: MAX_ESTRELLAS });
+  const [hud, setHud] = useState<HudData>({ soles: 0, estrellas: MAX_ESTRELLAS, temblor: false });
 
   const particleCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const gameCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -648,12 +699,12 @@ export function TikoRushGame() {
   useGameLoop(gameCanvasRef, sprites, gameState === 'PLAYING', handleHudUpdate, handleGameOver);
 
   const startTurn = useCallback(() => {
-    setHud({ soles: 0, estrellas: MAX_ESTRELLAS });
+    setHud({ soles: 0, estrellas: MAX_ESTRELLAS, temblor: false });
     setGameState('PLAYING');
   }, []);
   const resetGame = useCallback(() => {
     setResults({ soles: 0, estrellas: 0, survived: 0, obstaclesDodged: 0, pasajerosRecogidos: 0, won: false });
-    setHud({ soles: 0, estrellas: MAX_ESTRELLAS });
+    setHud({ soles: 0, estrellas: MAX_ESTRELLAS, temblor: false });
     setGameState('START');
   }, []);
 
@@ -702,17 +753,26 @@ export function TikoRushGame() {
   // ── PLAYING Screen ────────────────────
   if (gameState === 'PLAYING') {
     return (
-      <div className="playing-screen" id="playing-screen">
+      <div className={`playing-screen ${hud.temblor ? 'playing-temblor' : ''}`} id="playing-screen">
+        {/* ── Temblor Alert Banner ──────── */}
+        {hud.temblor && (
+          <div className="temblor-alert" id="temblor-alert">
+            <span className="temblor-alert-icon">⚠</span>
+            <span className="temblor-alert-text">MOMENTO SÍSMICO</span>
+            <span className="temblor-alert-sub">¡Velocidad +50% — Cuidado!</span>
+          </div>
+        )}
+
         {/* ── HTML/CSS HUD Overlay ──────── */}
-        <div className="hud-overlay" id="hud-overlay">
+        <div className={`hud-overlay ${hud.temblor ? 'hud-temblor' : ''}`} id="hud-overlay">
           <div className="hud-section">
             <div className="hud-soles" id="hud-soles">
               <img src="/sprites/sol.png" alt="Sol" className="hud-icon" />
               <div className="hud-soles-info">
                 <span className="hud-soles-value">{hud.soles}<span className="hud-soles-goal">/{SOLES_GOAL}</span></span>
-                <div className="soles-bar">
+                <div className={`soles-bar ${hud.temblor ? 'soles-bar-temblor' : ''}`}>
                   <div
-                    className="soles-bar-fill"
+                    className={`soles-bar-fill ${hud.temblor ? 'soles-bar-fill-temblor' : ''}`}
                     style={{ width: `${Math.min(100, (hud.soles / SOLES_GOAL) * 100)}%` }}
                   />
                 </div>
@@ -721,8 +781,12 @@ export function TikoRushGame() {
           </div>
 
           <div className="hud-section hud-center-section">
-            <span className="hud-game-title">TIKO RUSH</span>
-            <span className="hud-meta">Meta: {SOLES_GOAL} soles</span>
+            <span className={`hud-game-title ${hud.temblor ? 'hud-game-title-temblor' : ''}`}>
+              {hud.temblor ? '⚠ SISMO ⚠' : 'TIKO RUSH'}
+            </span>
+            <span className="hud-meta">
+              {hud.temblor ? '¡Sobrevive al temblor!' : `Meta: ${SOLES_GOAL} soles`}
+            </span>
           </div>
 
           <div className="hud-section">
